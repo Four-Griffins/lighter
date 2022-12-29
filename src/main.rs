@@ -7,6 +7,11 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher, Config};
 
 #[derive(Parser)]
 struct Args {
+    ///redraw every frame. Use this for animations
+    #[arg(short, long, default_value_t = false)]
+    live: bool,
+
+    ///path to a GLSL fragment shader to apply
     #[arg()]
     path: String,
 }
@@ -26,7 +31,6 @@ fn draw(
     vertices: &glium::VertexBuffer<Vertex>,
     indices: &glium::IndexBuffer<u8>,
     shader: &glium::Program,
-    //uniforms: &glium::uniforms::UniformsStorage<[f32; 3], glium::uniforms::EmptyUniforms>,
 ) {
     let size = display.get_framebuffer_dimensions();
     let uniforms = uniform! {
@@ -44,7 +48,7 @@ fn main() {
     //standard glium initialization
     let eventloop = glutin::event_loop::EventLoop::new();
     let wb = glutin::window::WindowBuilder::new();
-    let cb = glutin::ContextBuilder::new();
+    let cb = glutin::ContextBuilder::new().with_vsync(true);
     let display = glium::Display::new(wb, cb, &eventloop).unwrap();
     let mut shader = get_shader(&display, &args.path);
     
@@ -79,22 +83,25 @@ fn main() {
     });
     
     eventloop.run(move |ev, _, flow| {
-        *flow = ControlFlow::Poll;
+        *flow = if args.live { ControlFlow::Poll } else { ControlFlow::Wait };
         
         match ev {
             Event::RedrawRequested(..) => {
-                draw(&display, &vertices, &indices, &shader);
+                if !args.live { draw(&display, &vertices, &indices, &shader); }
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *flow = ControlFlow::Exit,
                 WindowEvent::Resized(..) => {
-                    draw(&display, &vertices, &indices, &shader);
+                    if !args.live { draw(&display, &vertices, &indices, &shader); }
                 }
                 _ => {},
             }
             Event::UserEvent(..) => {
                 shader = get_shader(&display, &args.path);
-                draw(&display, &vertices, &indices, &shader);
+                if !args.live { draw(&display, &vertices, &indices, &shader); }
+            }
+            Event::MainEventsCleared => {
+                if args.live { draw(&display, &vertices, &indices, &shader); }
             }
             _ => {},
         }
