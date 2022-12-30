@@ -5,6 +5,9 @@ use glium::glutin::event_loop::ControlFlow;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher, Config};
 
+const EMPTY: &str = "#version 450
+void main() {}";
+
 #[derive(Parser)]
 struct Args {
     ///Redraw every frame. Use this for animations
@@ -20,11 +23,18 @@ struct Args {
 struct Vertex { position: [f32; 2] }
 implement_vertex!(Vertex, position);
 
-fn get_shader(display: &glium::Display, path: &str) -> glium::Program {
+fn load_shader(display: &glium::Display, path: &str, shader: &mut glium::Program) {
     let vert = include_str!("./vert.glsl");
     let frag = std::fs::read_to_string(path).expect("failed to read file");
-    //TODO better handling here to not panic
-    glium::Program::from_source(display, vert, &frag, None).expect("compilation failed")
+
+    match glium::Program::from_source(display, vert, &frag, None) {
+        Ok(pr) => *shader = pr,
+        Err(glium::CompilationError(err, _)) => {
+            println!("{}", err);
+        },
+        Err(_) => {},
+    }
+
 }
 
 fn draw(
@@ -54,7 +64,7 @@ fn main() {
     let wb = glutin::window::WindowBuilder::new();
     let cb = glutin::ContextBuilder::new().with_vsync(true);
     let display = glium::Display::new(wb, cb, &eventloop).unwrap();
-    let mut shader = get_shader(&display, &args.path);
+    let mut shader = glium::Program::from_source(&display, include_str!("./vert.glsl"), EMPTY, None).unwrap();
     
     // Simply A Quad(TM)
     let vert1 = Vertex { position: [-1., -1.] };
@@ -66,7 +76,8 @@ fn main() {
     let indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &[0u8, 1, 2, 1, 2, 3]).unwrap();
     
     //draw once to make the window appear
-    draw(&display, &vertices, &indices, &shader, 0., 0);
+    load_shader(&display, &args.path, &mut shader);
+    draw(&display, &vertices, &indices, &mut shader, 0., 0);
     
     //watching changes in the user file, and sending a custom event to the glium event loop further down
     let (tx, rx) = std::sync::mpsc::channel();
@@ -78,10 +89,15 @@ fn main() {
     //the main thread will be busy with the glium eventloop, so listen for file changes in a different thread
     //and send those updates to the main thread using the handy dandy glium custom events
     std::thread::spawn(move || {
+        use notify::{EventKind, event::AccessKind};
         for ev in rx {
             match ev {
-                Ok(_) => { proxy.send_event(()).unwrap(); },
-                Err(why) => { eprintln!("failed to send event: {why}"); },
+                Err(why) => {},
+                Ok(notify::Event{ kind, .. }) => {
+                    if let EventKind::Access(AccessKind::Close(..)) = kind {
+                        proxy.send_event(()).unwrap();
+                    }
+                },
             }
         }
     });
@@ -104,7 +120,7 @@ fn main() {
                 _ => {},
             }
             Event::UserEvent(..) => {
-                shader = get_shader(&display, &args.path);
+                load_shader(&display, &args.path, &mut shader);
                 if !args.live { frame += 1; draw(&display, &vertices, &indices, &shader, time, frame); }
             }
             Event::MainEventsCleared => {
